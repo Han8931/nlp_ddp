@@ -1,7 +1,8 @@
 import os
 
-gpu_list = "0,1,2,3"
-os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list 
+#gpu_list = "0"
+##gpu_list = "0,1,2,3"
+#os.environ['CUDA_VISIBLE_DEVICES'] = gpu_list 
 
 import torch
 import torchvision
@@ -35,10 +36,6 @@ def init_distributed():
     world_size = int(os.environ['WORLD_SIZE'])
     local_rank = int(os.environ['LOCAL_RANK'])
 
-#    print(f"WorldSize: {world_size}") 
-#    print(f"LocalRank: {local_rank}") 
-#    print(f"Rank: {rank}") 
-
     dist.init_process_group(
             backend="nccl",
             init_method=dist_url,
@@ -51,8 +48,6 @@ def init_distributed():
     # synchronizes all the threads to reach this point before moving on
     dist.barrier()
     setup_for_distributed(rank == 0)
-
-
 
 class ClsDataset(torch.utils.data.Dataset):
     def __init__(self, encodings, labels):
@@ -112,7 +107,6 @@ def get_parser():
 
     return args
 
-
 def data_loader(args, tokenizer):
 
     if args.dataset == 'ag':
@@ -147,80 +141,11 @@ def data_loader(args, tokenizer):
 
     return train_dataloader, test_dataloader, dev_dataloader
 
-def train(model, trainloader, args):
-    print("Start training...")
-
-    criterion = nn.CrossEntropyLoss()
-
-    optimizer = AdamW(model.parameters(), lr=args.lr)
-    #optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
-
-    num_of_batches = len(trainloader)
-
-    for epoch in range(args.epochs):  # loop over the dataset multiple times
-
-        trainloader.sampler.set_epoch(epoch)
-        running_loss = 0.0
-        ddp_loss = torch.zeros(2).cuda()
-        for i, batch in enumerate(trainloader, 0):
-
-            # get the inputs; data is a list of [inputs, labels]
-            batch = tuple(value.cuda() for key, value in batch.items())
-            input_ids, attention_mask, labels = batch
-
-            # zero the parameter gradients
-            optimizer.zero_grad()
-
-            # forward + backward + optimize
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask, labels=labels)
-            loss = outputs['loss']
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-            optimizer.step()
-
-            ddp_loss[0]+=loss.item()
-            ddp_loss[1]+=input_ids.shape[0]
-
-
-            # print statistics
-            running_loss += loss.item()
-            if is_main_process:
-                if i%100==0:
-                    dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
-                    print(f"epoch: {i}/{epoch}, loss: {loss.item():.4f} ")
-                    print(f"Loss: {ddp_loss[0]/ddp_loss[1]} || {ddp_loss[0]} || {ddp_loss[1]}") 
-                    print(f"Loss: {ddp_loss[0]/4} || {ddp_loss[0]} || {ddp_loss[1]}") 
-
-#                loss_log = loss.clone().detach()
-#                loss_mean = dist.reduce(loss_log, rank=0) / dist.get_world_size()
-#                if dist.get_rank() == 0:
-#                    # collect results into rank0
-#                    print(f"epoch: {epoch}, loss: {loss_mean} ")
-
-        print(f'[Epoch {epoch + 1}/{args.epochs}] loss: {running_loss / num_of_batches:.3f}')
-
-        # save
-        if is_main_process:
-
-            ckpt_name = args.save_model + f"_{epoch}"
-            print(f"Save: {ckpt_name}")
-            state = {
-                'model': model.state_dict(),
-                'epoch': epoch,
-            }
-            ckpt_dir = args.model_dir_path
-            if not os.path.isdir(ckpt_dir):
-                os.makedirs(ckpt_dir)
-            torch.save(state, os.path.join(ckpt_dir, ckpt_name))
-
-        dist.barrier()
-
-    print('Finished Training')
-
 def test(model, testloader):
 
     TP = 0
     total = len(testloader.dataset)
+    print(total)
 
     with torch.no_grad():
         for batch in testloader:
@@ -243,52 +168,8 @@ def test(model, testloader):
 def cleanup():
     dist.destroy_process_group()
 
-def main_fn():
-    start = time.time()  
-    init_distributed()
-    PATH = './cifar_net.pth'
-
-    args = get_parser()
-
-    from transformers import RobertaTokenizer
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-
-    print("Load Dataset...")
-    train_dataloader, test_dataloader, dev_dataloader = data_loader(args, tokenizer)
-
-    print("Load Model...")
-    from transformers import RobertaForSequenceClassification
-    model = RobertaForSequenceClassification.from_pretrained('roberta-base', num_labels=4)
-    model.cuda()
-
-    local_rank = int(os.environ['LOCAL_RANK'])
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
-
-    print("Start Training...")
-    start_train = time.time()
-    train(model, train_dataloader, args)
-    end_train = time.time()
-
-#    # Load
-    if is_main_process:
-        load_path = os.path.join(args.model_dir_path, 'cls_trans_0')
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
-        checkpoint = torch.load(load_path, map_location=map_location)
-        model.load_state_dict(checkpoint['model'])
-    dist.barrier()
-#
-#    print("Start test")
-#    test(model, test_dataloader)
-#    print("Finish test")
-
-    end = time.time()
-    seconds = (end - start)
-    seconds_train = (end_train - start_train)
-    print(f"Total elapsed time: {seconds:.2f} seconds, Train 1 epoch {seconds_train:.2f} seconds")
-    #cleanup()
-
 if __name__ == '__main__':
-    start = time.time()  
+    start_t_gen = time.perf_counter()
     init_distributed()
     PATH = './cifar_net.pth'
 
@@ -298,7 +179,7 @@ if __name__ == '__main__':
     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
 
     print("Load Dataset...")
-    train_dataloader, test_dataloader, dev_dataloader = data_loader(args, tokenizer)
+    _, test_dataloader, _ = data_loader(args, tokenizer)
 
     print("Load Model...")
     from transformers import RobertaForSequenceClassification
@@ -308,14 +189,8 @@ if __name__ == '__main__':
     local_rank = int(os.environ['LOCAL_RANK'])
     model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
 
-    print("Start Training...")
-    start_train = time.time()
-    train(model, train_dataloader, args)
-    end_train = time.time()
-
-#    # Load
     if is_main_process:
-        load_path = os.path.join(args.model_dir_path, 'cls_trans_0')
+        load_path = os.path.join(args.model_dir_path, 'cls_trans_1')
         map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
         checkpoint = torch.load(load_path, map_location=map_location)
         model.load_state_dict(checkpoint['model'])
@@ -325,8 +200,6 @@ if __name__ == '__main__':
     test(model, test_dataloader)
     print("Finish test")
 
-    end = time.time()
-    seconds = (end - start)
-    seconds_train = (end_train - start_train)
-    print(f"Total elapsed time: {seconds:.2f} seconds, Train 1 epoch {seconds_train:.2f} seconds")
-    #cleanup()
+    eval_t = time.perf_counter()-start_t_gen
+    print(f"Total Evaluation Time: {timedelta(seconds=eval_t)}", flush=True) 
+    cleanup()

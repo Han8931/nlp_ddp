@@ -1,4 +1,8 @@
 *.pth
 *.swp
 data/
+*.pyc
+__pycache__/
+__pycache__
+checkpoint/
 

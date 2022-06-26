@@ -1,16 +1,25 @@
 import torch.distributed as dist
 import torch 
 
-def load_checkpoint_path(model, optimizer, rank, checkpoint_path):
-    # configure map_location properly
-    map_location = {'cuda:%d' % 0: 'cuda:%d' % rank}
-    checkpoint_state = torch.load(checkpoint_path, map_location=map_location)
+import os
 
-    model.load_state_dict(checkpoint_state['model'])
-    iter_init = checkpoint_state['iter_no'] + 1  # next iteration
-    optimizer.load_state_dict(checkpoint_state['optimizer'])
-    return iter_init
+def load_checkpoint(model, model_name, ckpt_dir):
+    print(f"Load: {model_name}") 
+    load_path = os.path.join(ckpt_dir, model_name)
+    checkpoint = torch.load(load_path)
+    model.load_state_dict(checkpoint['model'])
+    return model
 
+def save_checkpoint(save_model, model, epoch, ckpt_dir):
+    ckpt_name = save_model + f"_{epoch}"
+    print(f"Save: {ckpt_name}")
+    state = {
+        'model': model.state_dict(),
+        'epoch': epoch,
+    }
+    if not os.path.isdir(ckpt_dir):
+        os.makedirs(ckpt_dir)
+    torch.save(state, os.path.join(ckpt_dir, ckpt_name))
 
 def is_dist_avail_and_initialized():
     if not dist.is_available():
