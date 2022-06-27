@@ -243,50 +243,6 @@ def test(model, testloader):
 def cleanup():
     dist.destroy_process_group()
 
-def main_fn():
-    start = time.time()  
-    init_distributed()
-    PATH = './cifar_net.pth'
-
-    args = get_parser()
-
-    from transformers import RobertaTokenizer
-    tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-
-    print("Load Dataset...")
-    train_dataloader, test_dataloader, dev_dataloader = data_loader(args, tokenizer)
-
-    print("Load Model...")
-    from transformers import RobertaForSequenceClassification
-    model = RobertaForSequenceClassification.from_pretrained('roberta-base', num_labels=4)
-    model.cuda()
-
-    local_rank = int(os.environ['LOCAL_RANK'])
-    model = nn.parallel.DistributedDataParallel(model, device_ids=[local_rank])
-
-    print("Start Training...")
-    start_train = time.time()
-    train(model, train_dataloader, args)
-    end_train = time.time()
-
-#    # Load
-    if is_main_process:
-        load_path = os.path.join(args.model_dir_path, 'cls_trans_0')
-        map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
-        checkpoint = torch.load(load_path, map_location=map_location)
-        model.load_state_dict(checkpoint['model'])
-    dist.barrier()
-#
-#    print("Start test")
-#    test(model, test_dataloader)
-#    print("Finish test")
-
-    end = time.time()
-    seconds = (end - start)
-    seconds_train = (end_train - start_train)
-    print(f"Total elapsed time: {seconds:.2f} seconds, Train 1 epoch {seconds_train:.2f} seconds")
-    #cleanup()
-
 if __name__ == '__main__':
     start = time.time()  
     init_distributed()
@@ -329,4 +285,4 @@ if __name__ == '__main__':
     seconds = (end - start)
     seconds_train = (end_train - start_train)
     print(f"Total elapsed time: {seconds:.2f} seconds, Train 1 epoch {seconds_train:.2f} seconds")
-    #cleanup()
+    cleanup()
